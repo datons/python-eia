@@ -40,6 +40,7 @@ from eia.cli.facets_cmd import facets_command  # noqa: E402
 from eia.cli.get_cmd import get_command  # noqa: E402
 from eia.cli.exec_cmd import exec_command  # noqa: E402
 from eia.cli.config_cmd import config_app  # noqa: E402
+from eia.cli.cache_cmd import cache_app  # noqa: E402
 
 app.command(name="routes")(routes_command)
 app.command(name="meta")(meta_command)
@@ -47,6 +48,7 @@ app.command(name="facets")(facets_command)
 app.command(name="get")(get_command)
 app.command(name="exec")(exec_command)
 app.add_typer(config_app, name="config", help="Configuration management")
+app.add_typer(cache_app, name="cache", help="Cache management")
 
 
 def main() -> None:

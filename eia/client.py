@@ -2,6 +2,7 @@ import requests
 import logging
 import pandas as pd
 import re
+from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 from typing import (
     List,
@@ -18,6 +19,8 @@ from typing import (
 )
 import os
 from dataclasses import dataclass, field
+
+from eia.cache import CacheConfig, CacheStore, _facets_key
 
 # Configure logging
 logging.basicConfig(
@@ -258,10 +261,17 @@ class FacetContainer(BaseFacetContainer):
 class Data:
     """Represents a data endpoint in the EIA API with its metadata and query capabilities."""
 
-    def __init__(self, client: "EIAClient", route: str, metadata: Dict[str, Any]):
+    def __init__(
+        self,
+        client: "EIAClient",
+        route: str,
+        metadata: Dict[str, Any],
+        cache: Optional[CacheStore] = None,
+    ):
         self._client = client
         self._route = route
         self._metadata = metadata
+        self._cache = cache
         self.id = metadata.get("id", route.split("/")[-1])
         self.name = metadata.get("name", "")
         self.description = metadata.get("description", "")
@@ -327,8 +337,11 @@ class Data:
         paginate: bool = True,
     ) -> pd.DataFrame:
         """
-        Retrieves data from this endpoint, stores it and metadata internally,
-        and returns the data as a pandas DataFrame. Handles pagination automatically by default.
+        Retrieves data from this endpoint with transparent caching.
+
+        On first call, fetches from the API and persists to a local parquet
+        cache. Subsequent calls for the same (or overlapping) date range
+        return cached data instantly, only fetching gaps.
 
         Args:
             data_columns: List of data column IDs to retrieve. If None, all available columns are fetched.
@@ -341,6 +354,151 @@ class Data:
             offset: Starting row offset for the first request.
             output_format: Response format ('json' or 'xml'). Must be 'json' for DataFrame conversion.
             paginate: Whether to automatically paginate through results (default: True).
+
+        Returns:
+            A pandas DataFrame containing the requested data
+        """
+        # Cache requires start/end and must be json format
+        can_cache = (
+            self._cache is not None
+            and start is not None
+            and end is not None
+            and output_format == "json"
+            and offset is None
+            and length is None
+        )
+
+        if not can_cache:
+            return self._fetch(
+                data_columns=data_columns,
+                facets=facets,
+                frequency=frequency,
+                start=start,
+                end=end,
+                sort=sort,
+                length=length,
+                offset=offset,
+                output_format=output_format,
+                paginate=paginate,
+            )
+
+        # -- Cache path --
+        route = self._route.strip("/")
+        freq_key = frequency or "_default_"
+        fk = _facets_key(facets)
+
+        start_ts = pd.Timestamp(start)
+        end_ts = pd.Timestamp(end)
+
+        # 1. Read cached data
+        cached = self._cache.read(route, freq_key, fk, start_ts, end_ts)
+        logging.debug(
+            "Cache read: %d rows for %s/%s/%s [%s → %s]",
+            len(cached), route, freq_key, fk, start, end,
+        )
+
+        # 2. Find gaps
+        gaps = self._cache.find_gaps(cached, start_ts, end_ts)
+
+        if not gaps:
+            logging.info("Cache hit — no gaps for %s/%s/%s", route, freq_key, fk)
+            df = cached
+        else:
+            logging.info(
+                "Cache gaps: %s — fetching %d range(s)",
+                [(str(g.start), str(g.end)) for g in gaps],
+                len(gaps),
+            )
+            # 3. Fetch each gap (always fetch ALL columns for cache reuse)
+            fetched_parts = []
+            for gap in gaps:
+                gap_df = self._fetch(
+                    data_columns=None,  # all columns → maximise cache reuse
+                    facets=facets,
+                    frequency=frequency,
+                    start=str(gap.start.date()) if gap.start.hour == 0 else gap.start.isoformat(),
+                    end=str(gap.end.date()) if gap.end.hour == 0 else gap.end.isoformat(),
+                    sort=sort,
+                    paginate=paginate,
+                )
+                if not gap_df.empty:
+                    fetched_parts.append(gap_df)
+
+            # 4. Concat cached + new, deduplicate, sort
+            all_parts = [cached] + fetched_parts if not cached.empty else fetched_parts
+            if all_parts:
+                df = pd.concat(all_parts, ignore_index=False)
+                # Ensure period is the index for dedup/sort
+                if "period" in df.columns and not isinstance(df.index, pd.DatetimeIndex):
+                    df = df.set_index("period")
+                    df.index.name = "period"
+                # For long-format data: deduplicate keeping latest fetch
+                # Group by index + all non-numeric columns to identify unique rows
+                facet_cols = [c for c in df.columns if c not in list(self.data_columns.keys())]
+                if facet_cols:
+                    df = df.reset_index()
+                    df = df.drop_duplicates(
+                        subset=["period"] + facet_cols,
+                        keep="last",
+                    )
+                    df = df.set_index("period")
+                else:
+                    df = df[~df.index.duplicated(keep="last")]
+                df = df.sort_index()
+            else:
+                df = pd.DataFrame()
+
+            # 5. Persist to cache
+            if not df.empty:
+                self._cache.write(route, freq_key, fk, df)
+
+        # 6. Filter to requested data_columns before returning
+        if data_columns and not df.empty:
+            existing = [c for c in data_columns if c in df.columns]
+            # Always keep facet columns alongside requested data columns
+            facet_cols = [c for c in df.columns if c not in list(self.data_columns.keys())]
+            keep = list(dict.fromkeys(facet_cols + existing))  # preserve order, dedupe
+            df = df[keep]
+
+        # Reset index so 'period' is a regular column (matches _fetch output)
+        if isinstance(df.index, pd.DatetimeIndex) and df.index.name == "period":
+            df = df.reset_index()
+
+        # Slice to requested range
+        if not df.empty and "period" in df.columns:
+            df = df[(df["period"] >= start_ts) & (df["period"] <= end_ts + pd.Timedelta(days=1))]
+
+        self.dataframe = df
+        return df
+
+    def _fetch(
+        self,
+        data_columns: Optional[List[str]] = None,
+        facets: Optional[Dict[str, Union[str, List[str]]]] = None,
+        frequency: Optional[str] = None,
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+        sort: Optional[List[Dict[str, str]]] = None,
+        length: Optional[int] = None,
+        offset: Optional[int] = None,
+        output_format: Optional[Literal["json", "xml"]] = "json",
+        paginate: bool = True,
+    ) -> pd.DataFrame:
+        """
+        Fetches data from the EIA API (no caching). This is the original
+        get() logic extracted verbatim.
+
+        Args:
+            data_columns: List of data column IDs to retrieve. If None, all available columns are fetched.
+            facets: Dictionary of facet filters.
+            frequency: Data frequency ID (e.g., 'daily', 'monthly')
+            start: Start date/period
+            end: End date/period
+            sort: List of sort specifications
+            length: Maximum number of rows to return *if paginate=False*.
+            offset: Starting row offset for the first request.
+            output_format: Response format ('json' or 'xml').
+            paginate: Whether to automatically paginate through results.
 
         Returns:
             A pandas DataFrame containing the requested data
@@ -497,7 +655,8 @@ class Route:
 
             # If response doesn't contain routes, it means this endpoint has data
             if "routes" not in response_data:
-                self._data = Data(self._client, self._slug, response_data)
+                cache = getattr(self._client, "_cache", None)
+                self._data = Data(self._client, self._slug, response_data, cache=cache)
 
     def __getattr__(self, name: str) -> Union["Route", Any]:
         """
@@ -597,7 +756,13 @@ class EIAClient:
     )
 
     def __init__(
-        self, api_key: Optional[str] = None, session: Optional[requests.Session] = None
+        self,
+        api_key: Optional[str] = None,
+        session: Optional[requests.Session] = None,
+        *,
+        cache: bool = True,
+        cache_dir: Optional[Union[str, Path]] = None,
+        cache_recent_ttl: int = 48,
     ):
         """
         Initializes the EIAClient.
@@ -605,6 +770,9 @@ class EIAClient:
         Args:
             api_key: Your EIA API key. If None, it will try to read from the EIA_API_KEY environment variable.
             session: An optional requests.Session object for persistent connections.
+            cache: Enable/disable local parquet caching (default: True).
+            cache_dir: Custom cache directory. Defaults to ~/.cache/eia.
+            cache_recent_ttl: Hours before recent data is re-fetched (default: 48).
         """
         resolved_api_key = api_key or os.environ.get("EIA_API_KEY")
         if not resolved_api_key:
@@ -614,7 +782,16 @@ class EIAClient:
         self.api_key = resolved_api_key
         self.session = session or requests.Session()
         self.session.headers.update({"User-Agent": "Python EIAClient"})
-        logging.info("EIAClient initialized.")
+
+        # Cache setup
+        config = CacheConfig(
+            enabled=cache,
+            cache_dir=Path(cache_dir) if cache_dir else CacheConfig().cache_dir,
+            recent_ttl_hours=cache_recent_ttl,
+        )
+        self._cache: Optional[CacheStore] = CacheStore(config) if config.enabled else None
+
+        logging.info("EIAClient initialized (cache=%s).", "enabled" if cache else "disabled")
 
     def route(self, slug: str) -> Route:
         """
@@ -857,7 +1034,7 @@ class EIAClient:
                 )
 
         # Instantiate and return the Data object
-        return Data(self, route_string, metadata)
+        return Data(self, route_string, metadata, cache=self._cache)
 
     def get_data_from_url(self, url: str) -> Dict[str, Any]:
         """
