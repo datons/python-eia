@@ -412,12 +412,16 @@ class Data:
             # 3. Fetch each gap (always fetch ALL columns for cache reuse)
             fetched_parts = []
             for gap in gaps:
+                # Format gap dates to match the endpoint's frequency
+                # Monthly endpoints expect YYYY-MM, daily expects YYYY-MM-DD, etc.
+                gap_start = self._format_gap_date(gap.start, frequency)
+                gap_end = self._format_gap_date(gap.end, frequency)
                 gap_df = self._fetch(
                     data_columns=None,  # all columns → maximise cache reuse
                     facets=facets,
                     frequency=frequency,
-                    start=str(gap.start.date()) if gap.start.hour == 0 else gap.start.isoformat(),
-                    end=str(gap.end.date()) if gap.end.hour == 0 else gap.end.isoformat(),
+                    start=gap_start,
+                    end=gap_end,
                     sort=sort,
                     paginate=paginate,
                 )
@@ -464,12 +468,32 @@ class Data:
         if isinstance(df.index, pd.DatetimeIndex) and df.index.name == "period":
             df = df.reset_index()
 
-        # Slice to requested range
+        # Slice to requested range (handle tz-aware vs tz-naive)
         if not df.empty and "period" in df.columns:
+            period_tz = getattr(df["period"].dt, "tz", None)
+            if period_tz is not None:
+                start_ts = start_ts.tz_localize(period_tz) if start_ts.tzinfo is None else start_ts.tz_convert(period_tz)
+                end_ts = end_ts.tz_localize(period_tz) if end_ts.tzinfo is None else end_ts.tz_convert(period_tz)
             df = df[(df["period"] >= start_ts) & (df["period"] <= end_ts + pd.Timedelta(days=1))]
 
         self.dataframe = df
         return df
+
+    @staticmethod
+    def _format_gap_date(ts: "pd.Timestamp", frequency: Optional[str] = None) -> str:
+        """Format a gap timestamp to match the API frequency.
+
+        Monthly endpoints expect YYYY-MM, annual expects YYYY,
+        daily/hourly expect YYYY-MM-DD. Falls back to date string.
+        """
+        if frequency is not None:
+            freq_lower = frequency.lower()
+            if "annual" in freq_lower or "yearly" in freq_lower:
+                return str(ts.year)
+            if "month" in freq_lower:
+                return ts.strftime("%Y-%m")
+        # For daily, hourly, or unknown: use date string
+        return str(ts.date())
 
     def _fetch(
         self,
@@ -507,6 +531,11 @@ class Data:
         column_ids_to_fetch = (
             data_columns if data_columns is not None else list(self.data_columns.keys())
         )
+        # Some endpoints report no data columns in metadata but DO return
+        # 'value' when explicitly requested. Fall back to ['value'] so the
+        # response includes actual data instead of metadata-only rows.
+        if not column_ids_to_fetch:
+            column_ids_to_fetch = ["value"]
 
         # Ensure output is json if we want a DataFrame
         if output_format != "json":
