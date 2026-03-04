@@ -9,7 +9,8 @@ description = "A Python client for the U.S. Energy Information Administration (E
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
-authors = [{ name = "Jesus Lopez", email = "jesus.lopez@datons.ai" }]
+authors = [{ name = "Jesús López", email = "jesus.lopez@datons.ai" }]
+keywords = ["eia", "energy", "electricity", "oil", "gas", "api", "usa"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -41,8 +42,9 @@ dev = [
 
 [project.urls]
 Homepage = "https://github.com/datons/python-eia"
-Repository = "https://github.com/datons/python-eia.git"
+Repository = "https://github.com/datons/python-eia"
 Issues = "https://github.com/datons/python-eia/issues"
+Changelog = "https://github.com/datons/python-eia/releases"
 
 [tool.hatch.build.targets.wheel]
 packages = ["eia"]
