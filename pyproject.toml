@@ -24,7 +24,7 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering",
 ]
-dependencies = ["requests>=2.31.0", "urllib3>=2.0.0", "pandas>=2.0", "pyarrow>=14.0", "typer>=0.9", "rich>=13.0"]
+dependencies = ["requests>=2.31.0", "urllib3>=2.0.0", "pandas>=2.0", "pyarrow>=14.0", "typer>=0.9", "rich>=13.0", "pyyaml>=6.0"]
 
 [project.scripts]
 eia = "eia.cli:app"
@@ -47,4 +47,10 @@ Issues = "https://github.com/datons/python-eia/issues"
 Changelog = "https://github.com/datons/python-eia/releases"
 
 [tool.hatch.build.targets.wheel]
-packages = ["eia"]
+packages = ["src/eia"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: tests that hit real APIs (deselect with -m 'not integration')",
+]

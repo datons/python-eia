@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 from typing import (
+    TYPE_CHECKING,
     List,
     Dict,
     Optional,
@@ -17,6 +18,9 @@ from typing import (
     Protocol,
     runtime_checkable,
 )
+
+if TYPE_CHECKING:
+    from eia.catalog import RouteInfo
 import os
 from dataclasses import dataclass, field
 
@@ -90,9 +94,16 @@ class FacetInfo:
     # Store the route slug for potential API calls
     _route_slug: Optional[str] = field(default=None, repr=False)
     _client: Optional["EIAClient"] = field(default=None, repr=False)
+    _cached_values: Optional[List["FacetValue"]] = field(default=None, repr=False)
 
     def get_values(self) -> List[FacetValue]:
-        """Fetches and returns all possible values for this facet."""
+        """Returns all possible values for this facet.
+
+        Uses cached catalog values when available, otherwise fetches from the API.
+        """
+        if self._cached_values is not None:
+            return self._cached_values
+
         if not self._client or not self._route_slug:
             raise ValueError("Client and route slug must be set to fetch facet values.")
 
@@ -291,16 +302,26 @@ class Data:
             if isinstance(freq, dict) and "id" in freq
         ]
 
-        facet_dict = {
-            facet_data["id"]: FacetInfo(
-                id=facet_data["id"],
+        cached_facet_values = metadata.get("_facet_values", {})
+        facet_dict = {}
+        for facet_data in metadata.get("facets", []):
+            if not isinstance(facet_data, dict) or "id" not in facet_data:
+                continue
+            fid = facet_data["id"]
+            # Build cached FacetValue list from catalog values if available
+            cached_values = None
+            if fid in cached_facet_values:
+                cached_values = [
+                    FacetValue(id=vid, name=vname)
+                    for vid, vname in cached_facet_values[fid].items()
+                ]
+            facet_dict[fid] = FacetInfo(
+                id=fid,
                 description=facet_data.get("description"),
-                _route_slug=route,  # Pass route slug
-                _client=client,  # Pass client instance
+                _route_slug=route,
+                _client=client,
+                _cached_values=cached_values,
             )
-            for facet_data in metadata.get("facets", [])
-            if isinstance(facet_data, dict) and "id" in facet_data
-        }
         # Use FacetContainer for attribute-based access
         self.facets = FacetContainer(facet_dict)
 
@@ -820,6 +841,11 @@ class EIAClient:
         )
         self._cache: Optional[CacheStore] = CacheStore(config) if config.enabled else None
 
+        # Catalog manager (lazy-loads YAML on first access)
+        from eia.catalog_manager import EIACatalogManager
+
+        self.catalog = EIACatalogManager(self)
+
         logging.info("EIAClient initialized (cache=%s).", "enabled" if cache else "disabled")
 
     def route(self, slug: str) -> Route:
@@ -1018,11 +1044,59 @@ class EIAClient:
 
         return response_data.get("response", {})
 
+    @staticmethod
+    def _route_info_to_metadata(route_info: "RouteInfo") -> Dict[str, Any]:
+        """Reconstruct API-style metadata dict from a RouteInfo with cached schema."""
+        metadata: Dict[str, Any] = {
+            "id": route_info.route.split("/")[-1],
+            "name": route_info.name,
+            "description": route_info.description,
+            "defaultFrequency": route_info.frequency,
+            "startPeriod": route_info.start_period,
+            "endPeriod": route_info.end_period,
+            "defaultDateFormat": route_info.default_date_format,
+        }
+
+        # Reconstruct frequency list
+        metadata["frequency"] = [
+            {
+                "id": f.id,
+                "description": f.description,
+                "query": f.query,
+                "format": f.format,
+            }
+            for f in route_info.frequencies
+        ]
+
+        # Reconstruct facets list, with cached values
+        metadata["facets"] = [
+            {"id": fh.id, "description": fh.description}
+            for fh in route_info.facets
+        ]
+        metadata["_facet_values"] = {
+            fh.id: fh.values
+            for fh in route_info.facets
+            if fh.values
+        }
+
+        # Reconstruct data dict (keyed by column id)
+        metadata["data"] = {
+            col.id: {
+                "units": col.units,
+                "aggregation-method": col.aggregation_method,
+                "alias": col.alias,
+            }
+            for col in route_info.data_columns
+        }
+
+        return metadata
+
     def get_data_endpoint(self, route_string: str) -> Data:
         """
         Directly retrieves the Data object for a known, complete data route string.
 
-        This allows bypassing the chained route navigation if the exact data route is known.
+        If the route exists in the catalog with cached API schema, uses that
+        to avoid an API metadata call. Otherwise falls back to fetching from the API.
 
         Args:
             route_string: The full route path to the data endpoint
@@ -1035,9 +1109,19 @@ class EIAClient:
             EIAError: If the route does not exist or does not contain data.
         """
         route_string = route_string.strip("/")
-        logging.info(f"Directly accessing data endpoint metadata for: {route_string}")
 
-        # Fetch metadata for the route
+        # Try catalog first — skip API call if schema is cached
+        try:
+            route_info = self.catalog.get_route(route_string)
+            if route_info.data_columns:  # has cached schema
+                logging.info(f"Using cached catalog schema for: {route_string}")
+                metadata = self._route_info_to_metadata(route_info)
+                return Data(self, route_string, metadata, cache=self._cache)
+        except KeyError:
+            pass
+
+        # Fallback: hit API as before
+        logging.info(f"Directly accessing data endpoint metadata for: {route_string}")
         metadata = self.get_metadata(route_string)
 
         # Check if the route actually contains data (basic check)

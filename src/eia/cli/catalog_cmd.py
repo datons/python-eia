@@ -15,6 +15,43 @@ catalog_app = typer.Typer(no_args_is_help=True)
 console = Console()
 
 
+@catalog_app.command("refresh")
+def catalog_refresh(
+    dry_run: bool = typer.Option(True, "--dry-run/--apply", help="Show what would change without modifying files"),
+):
+    """Discover new routes from the live EIA API and compare with the catalog."""
+    from eia.cli.app import get_client
+    from eia.catalog_manager import EIACatalogManager
+
+    client = get_client()
+    mgr = EIACatalogManager(client)
+    result = mgr.refresh(dry_run=dry_run)
+
+    if result.errors:
+        for err in result.errors:
+            console.print(f"[red]Error:[/red] {err}")
+
+    if result.updated:
+        console.print(f"\n[blue]Updated schema ({len(result.updated)}):[/blue]")
+        for r in result.updated:
+            console.print(f"  ~ {r}")
+
+    if result.added:
+        console.print(f"\n[green]New routes ({len(result.added)}):[/green]")
+        for r in result.added:
+            console.print(f"  + {r}")
+
+    if result.removed:
+        console.print(f"\n[yellow]Routes in catalog but not discovered ({len(result.removed)}):[/yellow]")
+        for r in result.removed:
+            console.print(f"  - {r}")
+
+    if not result.updated and not result.added:
+        console.print("[green]All routes up to date.[/green]")
+
+    console.print(f"\n[dim]Unchanged: {len(result.unchanged)} routes[/dim]")
+
+
 @catalog_app.command("routes")
 def catalog_routes(
     query: Optional[str] = typer.Argument(None, help="Filter routes by keyword"),
@@ -55,6 +92,35 @@ def catalog_show(
 
     if info.notes:
         console.print(f"\n  [yellow]Note:[/yellow] {info.notes}")
+
+    if info.start_period or info.end_period:
+        console.print(f"\n  Period: {info.start_period} → {info.end_period}")
+    if info.default_date_format:
+        console.print(f"  Date format: {info.default_date_format}")
+    if info.last_refreshed:
+        console.print(f"  [dim]Last refreshed: {info.last_refreshed}[/dim]")
+
+    if info.data_columns:
+        console.print(f"\n  [bold]Data Columns:[/bold]")
+        col_table = Table(show_header=True, padding=(0, 1))
+        col_table.add_column("Column", style="green")
+        col_table.add_column("Alias")
+        col_table.add_column("Units")
+        col_table.add_column("Aggregation")
+        for col in info.data_columns:
+            col_table.add_row(col.id, col.alias, col.units, col.aggregation_method)
+        console.print(col_table)
+
+    if info.frequencies:
+        console.print(f"\n  [bold]Frequencies:[/bold]")
+        freq_table = Table(show_header=True, padding=(0, 1))
+        freq_table.add_column("ID", style="green")
+        freq_table.add_column("Description")
+        freq_table.add_column("Query")
+        freq_table.add_column("Format")
+        for freq in info.frequencies:
+            freq_table.add_row(freq.id, freq.description, freq.query, freq.format)
+        console.print(freq_table)
 
     for facet in info.facets:
         console.print(f"\n  [cyan]Facet: {facet.id}[/cyan] — {facet.description}")
