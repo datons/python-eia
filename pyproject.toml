@@ -9,7 +9,7 @@ description = "A Python client for the U.S. Energy Information Administration (E
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
-authors = [{ name = "Jesús López", email = "jesus.lopez@datons.ai" }]
+authors = [{ name = "Jesús López", email = "jesus.lopez@datons.com" }]
 keywords = ["eia", "energy", "electricity", "oil", "gas", "api", "usa"]
 classifiers = [
     "Development Status :: 3 - Alpha",
