@@ -3,6 +3,11 @@ docs
 .DS_Store
 __pycache__
 .ipynb_checkpoints
-data
+# Anchor to the repo root so this only ignores a top-level scratch
+# `data/` directory. An unanchored `data` pattern also matches the
+# in-package resource directory `src/eia/data/`, which silently keeps
+# the `eia.data` package (routes.yaml / recipes.yaml) out of git, every
+# clone, CI and the published wheel.
+/data
 sketch
 dist/
