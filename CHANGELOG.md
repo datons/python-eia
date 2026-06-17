@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/datons/python-eia/compare/python-eia-v0.3.1...python-eia-v0.3.2) (2026-06-17)
+
+
+### Bug Fixes
+
+* derive __version__ from package metadata ([30b44a9](https://github.com/datons/python-eia/commit/30b44a946c5fca8672d866895dc64eef921daa7f))
+
 ## [0.3.1](https://github.com/datons/python-eia/compare/python-eia-v0.3.0...python-eia-v0.3.1) (2026-06-17)
 
 
