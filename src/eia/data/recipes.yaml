@@ -1,0 +1,96 @@
+version: 1
+recipes:
+  - id: "lng-exports-europe"
+    name: "US LNG Exports to Europe"
+    description: "Monthly LNG export volumes by vessel to European countries"
+    route: "natural-gas/move/expc"
+    facets:
+      process: "EVE"
+    frequency: "monthly"
+    notes: >-
+      Returns ALL countries. Filter df for European duoarea codes (NUS-NUK, NUS-NFR, NUS-NSP, NUS-NNL, NUS-NIT, NUS-NGM,
+      etc.) and series containing 'MMCF' for volumes.
+    cli_example: >-
+      eia get natural-gas/move/expc --facet process=EVE --start 2024-01 --end 2025-12
+        # Then filter output for European countries and MMCF series
+    python_example: |
+      data = client.get_data_endpoint('natural-gas/move/expc')
+      df = data.get(facets={'process': 'EVE'}, frequency='monthly', start='2024-01', end='2025-12')
+      europe = ['NUS-NFR','NUS-NGM','NUS-NUK','NUS-NNL','NUS-NSP','NUS-NIT']
+      vol = df[df['series'].str.contains('MMCF') & df['duoarea'].isin(europe)]
+
+  - id: "lng-exports-asia"
+    name: "US LNG Exports to Asia"
+    description: "Monthly LNG export volumes by vessel to Asian countries"
+    route: "natural-gas/move/expc"
+    facets:
+      process: "EVE"
+    frequency: "monthly"
+    notes: >-
+      Filter for: NUS-NJA (Japan), NUS-NKS (South Korea), NUS-NCH (China), NUS-NIN (India), NUS-NTW (Taiwan)
+    cli_example: ""
+    python_example: |
+      data = client.get_data_endpoint('natural-gas/move/expc')
+      df = data.get(facets={'process': 'EVE'}, frequency='monthly', start='2024-01', end='2025-12')
+      asia = ['NUS-NJA','NUS-NKS','NUS-NCH','NUS-NIN','NUS-NTW']
+      vol = df[df['series'].str.contains('MMCF') & df['duoarea'].isin(asia)]
+
+  - id: "us-grid-solar-wind"
+    name: "US Grid Solar & Wind Generation"
+    description: "Hourly solar and wind generation for the Lower 48"
+    route: "electricity/rto/fuel-type-data"
+    facets:
+      respondent: "US48"
+      fueltype:
+        - "SUN"
+        - "WND"
+    frequency: "hourly"
+    notes: ""
+    cli_example: >-
+      eia get electricity/rto/fuel-type-data --facet respondent=US48 --facet fueltype=SUN --facet fueltype=WND --start
+      2024-06-01 --end 2024-06-08 --frequency hourly --data value
+    python_example: |
+      data = client.get_data_endpoint('electricity/rto/fuel-type-data')
+      df = data.get(
+          facets={'respondent': 'US48', 'fueltype': ['SUN', 'WND']},
+          frequency='hourly', start='2024-06-01', end='2024-06-08',
+          data_columns=['value'],
+      )
+
+  - id: "crude-oil-prices"
+    name: "WTI & Brent Crude Oil Prices"
+    description: "Daily spot prices for WTI and Brent crude oil"
+    route: "petroleum/pri/spt"
+    facets:
+      series:
+        - "RWTC"
+        - "RBRTE"
+    frequency: "daily"
+    notes: ""
+    cli_example: >-
+      eia get petroleum/pri/spt --facet series=RWTC --facet series=RBRTE --start 2024-01-01 --end 2024-12-31
+    python_example: |
+      data = client.get_data_endpoint('petroleum/pri/spt')
+      df = data.get(
+          facets={'series': ['RWTC', 'RBRTE']},
+          frequency='daily', start='2024-01-01', end='2024-12-31',
+      )
+
+  - id: "retail-electricity-prices"
+    name: "Retail Electricity Prices by State"
+    description: "Monthly average retail electricity prices by state and sector"
+    route: "electricity/retail-sales"
+    facets:
+      sectorid: "ALL"
+    frequency: "monthly"
+    notes: ""
+    cli_example: >-
+      eia get electricity/retail-sales --facet stateid=CA --facet sectorid=ALL --start 2024-01 --end 2024-12 --data
+      price
+    python_example: |
+      data = client.get_data_endpoint('electricity/retail-sales')
+      df = data.get(
+          facets={'stateid': 'CA', 'sectorid': 'ALL'},
+          data_columns=['price'], frequency='monthly',
+          start='2024-01', end='2024-12',
+      )
