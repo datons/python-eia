@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/datons/python-eia/compare/python-eia-v0.3.0...python-eia-v0.3.1) (2026-06-17)
+
+
+### Bug Fixes
+
+* ship eia.data catalog files in package ([4f2050c](https://github.com/datons/python-eia/commit/4f2050cf239616d3a153270e73e81019c078206f)), closes [#2](https://github.com/datons/python-eia/issues/2)
+
 ## [0.3.0](https://github.com/datons/python-eia/compare/python-eia-v0.2.1...python-eia-v0.3.0) (2026-03-04)
 
 
